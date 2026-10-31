@@ -78,6 +78,13 @@ npm run dev
 ```
 Open http://localhost:5173.
 
+### Deploy (live URL): one service on Render
+The backend also serves the built React app, so there is one URL and no CORS setup.
+1. Push this repo to GitHub (`.env` is git-ignored, so your key stays private).
+2. On render.com: New > Blueprint > pick the repo (uses `render.yaml`). Enter `GEMINI_API_KEY` when asked.
+3. Open `https://<service>.onrender.com/api/health`, then the site root.
+Free Render services sleep when idle: open the site a minute before any live demo.
+
 ### Tests
 ```bash
 cd backend && pytest

@@ -5,15 +5,19 @@
  */
 import { buildEligibilityCheckPayload } from "./eligibilityRequests.js";
 
+// Empty in development (Vite proxies /api to localhost:8000). In production, set VITE_API_BASE
+// to the deployed backend address, e.g. https://nagrikai-api.onrender.com (no trailing slash).
+const API_BASE = (import.meta.env?.VITE_API_BASE || "").replace(/\/$/, "");
+
 async function request(path, options = {}) {
   let res;
   try {
-    res = await fetch(path, {
+    res = await fetch(API_BASE + path, {
       headers: { "Content-Type": "application/json" },
       ...options,
     });
   } catch {
-    throw new Error("Cannot reach the NagrikAI server. Is the backend running?");
+    throw new Error("Cannot reach the NagrikAI server. It may be waking up (wait 1 minute and retry) or offline.");
   }
   if (!res.ok) {
     let detail = `Request failed (${res.status})`;
