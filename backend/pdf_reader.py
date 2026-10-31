@@ -13,7 +13,7 @@ import json
 import socket
 import ssl
 from dataclasses import asdict, dataclass
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import certifi
 import httpx
@@ -86,13 +86,35 @@ def _issuer_url(cert: x509.Certificate) -> str | None:
     return None
 
 
-def _missing_intermediates(url: str) -> list[bytes]:
-    """DER bytes of the intermediate certificates the server forgot to send (may be empty)."""
+def _trusted_subjects() -> set[bytes]:
+    """Subject names of the root certificates this server already trusts."""
+    context = ssl.create_default_context(cafile=certifi.where())
+    context.load_default_certs()
+    subjects: set[bytes] = set()
+    for der in context.get_ca_certs(binary_form=True):
+        try:
+            subjects.add(x509.load_der_x509_certificate(der).subject.public_bytes())
+        except ValueError:
+            continue    # an unreadable certificate in the system store is simply ignored
+    return subjects
+
+
+def _name(cert_name: x509.Name) -> str:
+    return cert_name.rfc4514_string() or "(unnamed)"
+
+
+def _missing_intermediates(url: str) -> tuple[list[bytes], str]:
+    """
+    Returns (intermediates, note).
+    intermediates: DER bytes of the certificates the server forgot to send (may be empty).
+    note: a plain-language description of what happened, shown if the download still fails.
+    """
     parsed = urlparse(url)
     host, port = parsed.hostname, parsed.port or 443
     if not host:
-        return []
+        return [], "no host in link"
     found: list[bytes] = []
+    note = ""
     try:
         probe = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)   # only used to READ the certificate
         probe.check_hostname = False
@@ -101,21 +123,53 @@ def _missing_intermediates(url: str) -> list[bytes]:
             raw, server_hostname=host
         ) as tls:
             cert = _load_cert(tls.getpeercert(binary_form=True))
-        for _ in range(4):                       # leaf -> intermediate -> intermediate ...
+        trusted = _trusted_subjects()
+        note = f"site certificate issued by [{_name(cert.issuer)}]"
+        for _ in range(5):                       # leaf -> intermediate -> intermediate ...
+            if cert.issuer.public_bytes() in trusted:
+                note += "; that issuer is a trusted root (chain complete)"
+                break
             issuer_url = _issuer_url(cert)
             if not issuer_url:
+                note += f"; no download link for issuer [{_name(cert.issuer)}] and it is not a trusted root"
                 break
             r = httpx.get(issuer_url, timeout=15, follow_redirects=True)
             r.raise_for_status()
             if len(r.content) > MAX_CERT_BYTES:
+                note += "; issuer file too large"
                 break
             cert = _load_cert(r.content)
             if cert.issuer == cert.subject:      # self-signed = a root: never add it
+                note += f"; reached root [{_name(cert.subject)}] which is not trusted by this server"
                 break
             found.append(cert.public_bytes(serialization.Encoding.DER))
-    except (OSError, ValueError, httpx.HTTPError):
-        pass                                     # keep whatever we found; the caller re-checks
-    return found
+            note += f"; downloaded [{_name(cert.subject)}]"
+    except (OSError, ValueError, httpx.HTTPError) as e:
+        note += f"; stopped: {type(e).__name__}: {e}"
+    return found, note
+
+
+def _redirect_chain(url: str) -> list[str]:
+    """
+    The link itself plus every https address it redirects to. Each server on the way may have
+    its own incomplete certificate. Only the Location headers are read here; the document is
+    downloaded afterwards with full certificate checking.
+    """
+    urls, current = [url], url
+    for _ in range(5):
+        try:
+            with httpx.stream("GET", current, headers=HEADERS, timeout=20, follow_redirects=False,
+                              verify=False) as r:
+                location = r.headers.get("location")
+                if r.status_code not in (301, 302, 303, 307, 308) or not location:
+                    break
+        except httpx.HTTPError:
+            break
+        current = urljoin(current, location)
+        if not current.lower().startswith("https://") or current in urls:
+            break
+        urls.append(current)
+    return urls
 
 
 def _retry_context(extra_der: list[bytes]) -> ssl.SSLContext:
@@ -174,10 +228,24 @@ def _download_document(url: str) -> tuple[bytes, str, str]:
         except httpx.ConnectError as e:
             if not _is_cert_error(e):
                 raise
-            extra = _missing_intermediates(url)
+            extra, notes = [], []
+            for hop in _redirect_chain(url):
+                found, hop_note = _missing_intermediates(hop)
+                extra += [c for c in found if c not in extra]
+                notes.append(f"{urlparse(hop).hostname}: {hop_note}")
+            note = " | ".join(notes)
             if not extra:
+                raise DocumentError(
+                    f"Could not download the official document: {e} (certificate repair: {note})"
+                ) from e
+            try:
+                return _fetch(url, _retry_context(extra), limit)   # still fully verified
+            except httpx.ConnectError as e2:
+                if _is_cert_error(e2):
+                    raise DocumentError(
+                        f"Could not download the official document: {e2} (certificate repair: {note})"
+                    ) from e2
                 raise
-            return _fetch(url, _retry_context(extra), limit)   # still fully verified
     except httpx.HTTPError as e:
         raise DocumentError(f"Could not download the official document: {e}") from e
 

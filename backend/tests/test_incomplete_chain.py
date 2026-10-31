@@ -68,12 +68,24 @@ class _AiaServer:
         self.httpd.shutdown()
 
 
-def _chain(tmp_path, label):
+def _chain(tmp_path, label, cross_signed=False):
     """root -> intermediate -> leaf(127.0.0.1) with a CA-Issuers link to the intermediate."""
     k_root, k_int, k_leaf = (ec.generate_private_key(ec.SECP256R1()) for _ in range(3))
     root = _cert(f"{label} Root", f"{label} Root", k_root, k_root, True)
     inter = _cert(f"{label} Intermediate", f"{label} Root", k_int, k_root, True)
     aia_server = _AiaServer(inter.public_bytes(DER))
+    if cross_signed:
+        # the intermediate points at a CROSS-SIGNED copy of the (already trusted) root: same name and
+        # key, but issued by an old root that is NOT installed. We must not need it.
+        k_old = ec.generate_private_key(ec.SECP256R1())
+        cross = _cert(f"{label} Root", f"{label} Old Root", k_root, k_old, True)
+        cross_server = _AiaServer(cross.public_bytes(DER))
+        inter = _cert(f"{label} Intermediate", f"{label} Root", k_int, k_root, True, extra=(
+            x509.AuthorityInformationAccess([x509.AccessDescription(
+                AuthorityInformationAccessOID.CA_ISSUERS,
+                x509.UniformResourceIdentifier(f"http://127.0.0.1:{cross_server.port}/cross.cer"))]),))
+        aia_server.stop()
+        aia_server = _AiaServer(inter.public_bytes(DER))
     aia = x509.AuthorityInformationAccess([
         x509.AccessDescription(
             AuthorityInformationAccessOID.CA_ISSUERS,
@@ -155,7 +167,7 @@ def test_incomplete_chain_fails_without_the_fix_and_works_with_it(tmp_path, monk
             _handshake(plain, server.port)
 
         # 2. the fix: find the intermediate from the certificate itself, then verify strictly
-        extra = pdf_reader._missing_intermediates(f"https://127.0.0.1:{server.port}/doc.pdf")
+        extra, note = pdf_reader._missing_intermediates(f"https://127.0.0.1:{server.port}/doc.pdf")
         assert len(extra) == 1
         _handshake(pdf_reader._retry_context(extra), server.port)
     finally:
@@ -170,7 +182,7 @@ def test_untrusted_chain_is_still_rejected(tmp_path, monkeypatch, stdlib_http):
         other_roots, _, _, other_aia = _chain(tmp_path, "unrelated")
         other_aia.stop()
         monkeypatch.setattr(pdf_reader.certifi, "where", lambda: str(other_roots))
-        extra = pdf_reader._missing_intermediates(f"https://127.0.0.1:{server.port}/doc.pdf")
+        extra, note = pdf_reader._missing_intermediates(f"https://127.0.0.1:{server.port}/doc.pdf")
         assert len(extra) == 1
         with pytest.raises(ssl.SSLCertVerificationError):
             _handshake(pdf_reader._retry_context(extra), server.port)
@@ -182,3 +194,38 @@ def test_roots_are_never_added(tmp_path, monkeypatch):
     k = ec.generate_private_key(ec.SECP256R1())
     root = _cert("Self Root", "Self Root", k, k, True)
     assert root.issuer == root.subject    # the guard in _missing_intermediates skips these
+
+
+def test_cross_signed_root_is_not_used_when_the_real_root_is_already_trusted(tmp_path, monkeypatch, stdlib_http):
+    roots, leaf_pem, key_pem, aia = _chain(tmp_path, "cross", cross_signed=True)
+    monkeypatch.setattr(pdf_reader.certifi, "where", lambda: str(roots))
+    server = _TlsServer(leaf_pem, key_pem)
+    try:
+        extra, note = pdf_reader._missing_intermediates(f"https://127.0.0.1:{server.port}/doc.pdf")
+        assert len(extra) == 1, note                  # only the intermediate, NOT the cross-signed root
+        assert "chain complete" in note
+        _handshake(pdf_reader._retry_context(extra), server.port)
+    finally:
+        server.stop(); aia.stop()
+
+
+def test_redirect_chain_lists_every_https_hop(monkeypatch):
+    hops = {
+        "https://a.gov.in/doc.pdf": (302, "https://b.gov.in/files/doc.pdf"),
+        "https://b.gov.in/files/doc.pdf": (200, None),
+    }
+
+    class Resp:
+        def __init__(self, status, location):
+            self.status_code = status
+            self.headers = {"location": location} if location else {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+    monkeypatch.setattr(pdf_reader.httpx, "stream", lambda m, u, **kw: Resp(*hops[u]))
+    assert pdf_reader._redirect_chain("https://a.gov.in/doc.pdf") == [
+        "https://a.gov.in/doc.pdf", "https://b.gov.in/files/doc.pdf"]
