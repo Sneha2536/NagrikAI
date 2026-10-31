@@ -10,11 +10,17 @@ government site is slow (the cache holds REAL documents we fetched, not mock dat
 """
 import io
 import json
+import socket
 import ssl
 from dataclasses import asdict, dataclass
+from urllib.parse import urlparse
 
+import certifi
 import httpx
 import truststore
+from cryptography import x509
+from cryptography.hazmat.primitives import serialization
+from cryptography.x509.oid import AuthorityInformationAccessOID
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
 
@@ -27,6 +33,7 @@ HEADERS = {
 }
 HTML_PAGE_SIZE = 3000  # web pages have no pages, so we cut them into ~3000 char "pages"
 DOWNLOAD_CHUNK_BYTES = 64 * 1024
+MAX_CERT_BYTES = 100_000
 
 
 class DocumentError(Exception):
@@ -46,41 +53,131 @@ def _verification_context() -> ssl.SSLContext:
     return context
 
 
+def _is_cert_error(e: Exception) -> bool:
+    return "CERTIFICATE_VERIFY_FAILED" in str(e)
+
+
+# ---- Missing intermediate certificates ------------------------------------------------
+# Many .gov.in servers send only their own certificate and omit the "intermediate" one.
+# Browsers repair this by downloading the intermediate from the address written inside the
+# certificate (the "CA Issuers" link). Python does not. We do the same, safely:
+#   * only NON-self-signed certificates are added (we never add a new trusted root),
+#   * the chain must still end at a root your system already trusts.
+
+def _load_cert(data: bytes) -> x509.Certificate:
+    try:
+        return x509.load_der_x509_certificate(data)
+    except ValueError:
+        return x509.load_pem_x509_certificate(data)
+
+
+def _issuer_url(cert: x509.Certificate) -> str | None:
+    try:
+        aia = cert.extensions.get_extension_for_class(x509.AuthorityInformationAccess).value
+    except x509.ExtensionNotFound:
+        return None
+    for d in aia:
+        if d.access_method == AuthorityInformationAccessOID.CA_ISSUERS and isinstance(
+            d.access_location, x509.UniformResourceIdentifier
+        ):
+            value = d.access_location.value
+            if value.lower().startswith(("http://", "https://")):
+                return value
+    return None
+
+
+def _missing_intermediates(url: str) -> list[bytes]:
+    """DER bytes of the intermediate certificates the server forgot to send (may be empty)."""
+    parsed = urlparse(url)
+    host, port = parsed.hostname, parsed.port or 443
+    if not host:
+        return []
+    found: list[bytes] = []
+    try:
+        probe = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)   # only used to READ the certificate
+        probe.check_hostname = False
+        probe.verify_mode = ssl.CERT_NONE
+        with socket.create_connection((host, port), timeout=15) as raw, probe.wrap_socket(
+            raw, server_hostname=host
+        ) as tls:
+            cert = _load_cert(tls.getpeercert(binary_form=True))
+        for _ in range(4):                       # leaf -> intermediate -> intermediate ...
+            issuer_url = _issuer_url(cert)
+            if not issuer_url:
+                break
+            r = httpx.get(issuer_url, timeout=15, follow_redirects=True)
+            r.raise_for_status()
+            if len(r.content) > MAX_CERT_BYTES:
+                break
+            cert = _load_cert(r.content)
+            if cert.issuer == cert.subject:      # self-signed = a root: never add it
+                break
+            found.append(cert.public_bytes(serialization.Encoding.DER))
+    except (OSError, ValueError, httpx.HTTPError):
+        pass                                     # keep whatever we found; the caller re-checks
+    return found
+
+
+def _retry_context(extra_der: list[bytes]) -> ssl.SSLContext:
+    """Strict context: trusted roots + the recovered intermediates (as chain helpers only)."""
+    context = ssl.create_default_context(cafile=certifi.where())
+    context.load_default_certs()
+    # Without this flag an intermediate in the store would itself be trusted. We want the
+    # chain to reach a real root.
+    context.verify_flags &= ~ssl.VERIFY_X509_PARTIAL_CHAIN
+    for der in extra_der:
+        context.load_verify_locations(cadata=der)
+    if settings.PDF_CA_BUNDLE:
+        try:
+            context.load_verify_locations(cafile=settings.PDF_CA_BUNDLE)
+        except (OSError, ssl.SSLError) as e:
+            raise DocumentError(f"Could not load the configured PDF_CA_BUNDLE: {e}") from e
+    return context
+
+
+def _fetch(url: str, context: ssl.SSLContext, limit: int) -> tuple[bytes, str, str]:
+    with httpx.stream(
+        "GET",
+        url,
+        headers=HEADERS,
+        timeout=60,
+        follow_redirects=True,
+        verify=context,
+    ) as response:
+        response.raise_for_status()
+        content_length = response.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > limit:
+                    raise DocumentError(f"Document exceeds the {limit:,}-byte download limit.")
+            except ValueError:
+                pass  # A malformed header is still bounded while streaming below.
+
+        chunks = []
+        total = 0
+        for chunk in response.iter_bytes(chunk_size=DOWNLOAD_CHUNK_BYTES):
+            total += len(chunk)
+            if total > limit:
+                raise DocumentError(f"Document exceeds the {limit:,}-byte download limit.")
+            chunks.append(chunk)
+        return b"".join(chunks), response.headers.get("content-type", ""), response.encoding or "utf-8"
+
+
 def _download_document(url: str) -> tuple[bytes, str, str]:
     """Stream a document with verified TLS and enforce the configured response-size cap."""
     limit = settings.MAX_DOCUMENT_BYTES
     if limit <= 0:
         raise DocumentError("MAX_DOCUMENT_BYTES must be greater than zero.")
     try:
-        with httpx.stream(
-            "GET",
-            url,
-            headers=HEADERS,
-            timeout=60,
-            follow_redirects=True,
-            verify=_verification_context(),
-        ) as response:
-            response.raise_for_status()
-            content_length = response.headers.get("content-length")
-            if content_length:
-                try:
-                    if int(content_length) > limit:
-                        raise DocumentError(
-                            f"Document exceeds the {limit:,}-byte download limit."
-                        )
-                except ValueError:
-                    pass  # A malformed header is still bounded while streaming below.
-
-            chunks = []
-            total = 0
-            for chunk in response.iter_bytes(chunk_size=DOWNLOAD_CHUNK_BYTES):
-                total += len(chunk)
-                if total > limit:
-                    raise DocumentError(
-                        f"Document exceeds the {limit:,}-byte download limit."
-                    )
-                chunks.append(chunk)
-            return b"".join(chunks), response.headers.get("content-type", ""), response.encoding or "utf-8"
+        try:
+            return _fetch(url, _verification_context(), limit)
+        except httpx.ConnectError as e:
+            if not _is_cert_error(e):
+                raise
+            extra = _missing_intermediates(url)
+            if not extra:
+                raise
+            return _fetch(url, _retry_context(extra), limit)   # still fully verified
     except httpx.HTTPError as e:
         raise DocumentError(f"Could not download the official document: {e}") from e
 

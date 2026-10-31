@@ -12,3 +12,5 @@ data/pdfs/*
 data/index/*
 !data/pdfs/.gitkeep
 !data/index/.gitkeep
+
+.pytest_tmp/

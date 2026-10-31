@@ -29,7 +29,7 @@ def test_retry_delay_is_read_from_google_reply():
 
 
 def _resp(body):
-    return httpx.Response(429, body)
+    return httpx.Response(429, text=body)
 
 
 def test_daily_quota_is_not_retried_but_per_minute_is():
