@@ -1,0 +1,56 @@
+/**
+ * api.js: EVERY call to the backend lives here.
+ * Pages never use fetch() directly; they call these functions.
+ * If an endpoint changes, you fix it in one place.
+ */
+import { buildEligibilityCheckPayload } from "./eligibilityRequests.js";
+
+async function request(path, options = {}) {
+  let res;
+  try {
+    res = await fetch(path, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+  } catch {
+    throw new Error("Cannot reach the NagrikAI server. Is the backend running?");
+  }
+  if (!res.ok) {
+    let detail = `Request failed (${res.status})`;
+    try {
+      const body = await res.json();
+      if (body.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+    } catch {
+      /* response had no JSON body */
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+const post = (path, body) => request(path, { method: "POST", body: JSON.stringify(body) });
+
+/** Health check (also tells us which backend version is running) */
+export const getHealth = () => request("/api/health");
+
+/** Policy Explorer */
+export function searchPolicies(params = {}) {
+  const qs = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => v && qs.set(k, v));
+  return request(`/api/policies/search?${qs}`);
+}
+export const addPolicyFromUrl = (url) => post("/api/policies/from-url", { url });
+export const getPolicy = (id) => request(`/api/policies/${id}`);
+export const getDocument = (id) => request(`/api/policies/${id}/document`);
+
+/** Policy Explainer */
+export const explainPolicy = (policy_id, language = "en", refresh = false) =>
+  post("/api/explain", { policy_id, language, refresh });
+export const askPolicy = (policy_id, question, language = "en") =>
+  post("/api/ask", { policy_id, question, language });
+
+/** Eligibility Checker */
+export const getRules = (policy_id) => post("/api/eligibility/rules", { policy_id });
+export const checkEligibility = (policy_id, profile, language = "en", answers = {}, follow_up_submitted = false) =>
+  post("/api/eligibility/check", buildEligibilityCheckPayload(policy_id, profile, language, answers, follow_up_submitted));
+

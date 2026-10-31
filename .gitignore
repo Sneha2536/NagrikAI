@@ -1,0 +1,14 @@
+.env
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.DS_Store
+
+# Downloaded documents and caches are rebuilt automatically
+data/pdfs/*
+data/index/*
+!data/pdfs/.gitkeep
+!data/index/.gitkeep
