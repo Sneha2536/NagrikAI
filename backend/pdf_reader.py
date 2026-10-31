@@ -10,8 +10,10 @@ government site is slow (the cache holds REAL documents we fetched, not mock dat
 """
 import io
 import json
+from pathlib import Path
 import socket
 import ssl
+import warnings
 from dataclasses import asdict, dataclass
 from urllib.parse import urljoin, urlparse
 
@@ -34,15 +36,35 @@ HEADERS = {
 HTML_PAGE_SIZE = 3000  # web pages have no pages, so we cut them into ~3000 char "pages"
 DOWNLOAD_CHUNK_BYTES = 64 * 1024
 MAX_CERT_BYTES = 100_000
+CERTS_DIR = Path(__file__).resolve().parent / "certs"
+
+# Known official cross-certificates bridging newer CA roots to older roots universally trusted
+# in Mozilla/certifi root stores (e.g. GoDaddy transitioned to R1, but IIS servers often omit
+# the R1-to-G2 cross-certificate needed by standard trust stores).
+KNOWN_CROSS_CERTS = {
+    "CN=GoDaddy TLS Root CA - R1,O=GoDaddy.com,C=US": "https://certs.godaddy.com/repository/gd_tls_root-r1-cross-g2.crt",
+}
 
 
 class DocumentError(Exception):
     """The document could not be fetched or read."""
 
 
+def _load_bundled_certs(context: ssl.SSLContext) -> None:
+    """Load any repository-bundled CA / cross-certificates from backend/certs/."""
+    if CERTS_DIR.is_dir():
+        for cert_file in CERTS_DIR.glob("*"):
+            if cert_file.is_file() and cert_file.suffix.lower() in (".crt", ".pem", ".cer"):
+                try:
+                    context.load_verify_locations(cafile=str(cert_file))
+                except (OSError, ssl.SSLError):
+                    pass
+
+
 def _verification_context() -> ssl.SSLContext:
     """Use native system chain building, optionally extended with an explicitly trusted CA."""
     context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    _load_bundled_certs(context)
     ca_bundle = settings.PDF_CA_BUNDLE
     if ca_bundle:
         try:
@@ -91,11 +113,16 @@ def _trusted_subjects() -> set[bytes]:
     context = ssl.create_default_context(cafile=certifi.where())
     context.load_default_certs()
     subjects: set[bytes] = set()
-    for der in context.get_ca_certs(binary_form=True):
-        try:
-            subjects.add(x509.load_der_x509_certificate(der).subject.public_bytes())
-        except ValueError:
-            continue    # an unreadable certificate in the system store is simply ignored
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for der in context.get_ca_certs(binary_form=True):
+            try:
+                cert = x509.load_der_x509_certificate(der)
+                # Only genuine self-signed roots (intermediate CAs in system store are not roots)
+                if cert.issuer == cert.subject:
+                    subjects.add(cert.subject.public_bytes())
+            except Exception:
+                continue    # an unreadable or non-conformant certificate is simply ignored
     return subjects
 
 
@@ -129,6 +156,26 @@ def _missing_intermediates(url: str) -> tuple[list[bytes], str]:
             if cert.issuer.public_bytes() in trusted:
                 note += "; that issuer is a trusted root (chain complete)"
                 break
+
+            # If this intermediate is issued by a root that needs a cross-cert to reach a trusted root:
+            issuer_name = _name(cert.issuer)
+            cross_url = KNOWN_CROSS_CERTS.get(issuer_name)
+            if cross_url:
+                try:
+                    rx = httpx.get(cross_url, timeout=15, follow_redirects=True)
+                    rx.raise_for_status()
+                    cross_cert = _load_cert(rx.content)
+                    if cross_cert.issuer != cross_cert.subject:
+                        found.append(cross_cert.public_bytes(serialization.Encoding.DER))
+                        note += f"; downloaded cross-certificate [{_name(cross_cert.subject)}] issued by [{_name(cross_cert.issuer)}]"
+                        cert = cross_cert
+                        if cert.issuer.public_bytes() in trusted:
+                            note += "; reached trusted root (chain complete)"
+                            break
+                        continue
+                except (OSError, ValueError, httpx.HTTPError) as e:
+                    note += f"; cross-cert fetch failed ({e})"
+
             issuer_url = _issuer_url(cert)
             if not issuer_url:
                 note += f"; no download link for issuer [{_name(cert.issuer)}] and it is not a trusted root"
@@ -139,7 +186,22 @@ def _missing_intermediates(url: str) -> tuple[list[bytes], str]:
                 note += "; issuer file too large"
                 break
             cert = _load_cert(r.content)
-            if cert.issuer == cert.subject:      # self-signed = a root: never add it
+            if cert.issuer == cert.subject:      # self-signed = a root: never add it directly
+                subj_name = _name(cert.subject)
+                cross_url = KNOWN_CROSS_CERTS.get(subj_name)
+                if cross_url:
+                    try:
+                        rx = httpx.get(cross_url, timeout=15, follow_redirects=True)
+                        rx.raise_for_status()
+                        cross_cert = _load_cert(rx.content)
+                        if cross_cert.issuer != cross_cert.subject:
+                            found.append(cross_cert.public_bytes(serialization.Encoding.DER))
+                            note += f"; downloaded cross-certificate [{_name(cross_cert.subject)}] issued by [{_name(cross_cert.issuer)}]"
+                            if cross_cert.issuer.public_bytes() in trusted:
+                                note += "; reached trusted root (chain complete)"
+                                break
+                    except (OSError, ValueError, httpx.HTTPError) as e:
+                        note += f"; cross-cert fetch failed ({e})"
                 note += f"; reached root [{_name(cert.subject)}] which is not trusted by this server"
                 break
             found.append(cert.public_bytes(serialization.Encoding.DER))
@@ -179,8 +241,15 @@ def _retry_context(extra_der: list[bytes]) -> ssl.SSLContext:
     # Without this flag an intermediate in the store would itself be trusted. We want the
     # chain to reach a real root.
     context.verify_flags &= ~ssl.VERIFY_X509_PARTIAL_CHAIN
+    _load_bundled_certs(context)
     for der in extra_der:
         context.load_verify_locations(cadata=der)
+    if settings.PDF_CA_BUNDLE:
+        try:
+            context.load_verify_locations(cafile=settings.PDF_CA_BUNDLE)
+        except (OSError, ssl.SSLError) as e:
+            raise DocumentError(f"Could not load the configured PDF_CA_BUNDLE: {e}") from e
+    return context
     if settings.PDF_CA_BUNDLE:
         try:
             context.load_verify_locations(cafile=settings.PDF_CA_BUNDLE)

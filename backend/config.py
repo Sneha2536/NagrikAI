@@ -15,7 +15,7 @@ load_dotenv(ROOT / ".env")
 
 class Settings:
     # Bump when you change code. The frontend compares this to detect a backend that was not restarted.
-    BUILD = "2026-10-31-e"
+    BUILD = "2026-10-31-f"
 
     # ---- Which AI service to use: "gemini" (has a free tier) or "anthropic" (Claude)
     LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()

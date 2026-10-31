@@ -99,10 +99,17 @@ def search_policies(query=None, ministry=None, state=None, category=None,
         all_policies.extend(policies)
     _save_catalog(all_policies)
 
+    # Include previously saved custom/pasted documents so they remain discoverable in Explorer
+    catalog = _load_catalog()
+    combined_by_id = {k: Policy(**v) for k, v in catalog.items()}
+    for p in all_policies:
+        combined_by_id[p.id] = p
+    combined = list(combined_by_id.values())
+
     since = None
     if date_window in DATE_WINDOWS:
         since = (date.today() - timedelta(days=DATE_WINDOWS[date_window])).isoformat()
 
-    items = [p for p in all_policies if _matches(p, ministry, state, category, beneficiary, since, policy_only)]
-    items.sort(key=lambda p: p.published or "", reverse=True)
+    items = [p for p in combined if _matches(p, ministry, state, category, beneficiary, since, policy_only)]
+    items.sort(key=lambda p: (1 if p.source == "Official link" else 0, p.published or ""), reverse=True)
     return {"items": [p.to_dict() for p in items], "sources": status}
