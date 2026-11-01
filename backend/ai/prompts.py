@@ -34,7 +34,9 @@ If the document has no benefits, return an empty list for "benefits".
 """
 
 ASK_SYSTEM = GROUNDING_RULES + """
-You will get a question and EXCERPTS from one policy document.
+You will get a question and the TEXT of one policy document (all of it, or the most relevant passages).
+The question may use different words (or another language) than the document. Answer whenever the
+document contains the information, even if it is worded differently. Quote the document exactly as written.
 Return JSON:
 {
   "answerable": true or false,   // false if the excerpts do not contain the answer
@@ -74,3 +76,12 @@ Keep numbers, rupee amounts, dates and scheme names accurate. Use simple, everyd
 
 GENERAL_QUERY_TRANSLATE_SYSTEM = """Translate the user's question into English.
 Return JSON {"english": "..."}."""
+
+
+QUERY_REWRITE_SYSTEM = """You help search a government policy document.
+The user asks a question in any language. Return JSON:
+{
+  "english": "the question in English, using the formal words a government document would use",
+  "keywords": ["10 to 15 English words or short phrases likely to appear in the relevant passage, including synonyms"]
+}
+Do not answer the question."""

@@ -1,6 +1,13 @@
+/**
+ * Sidebar.jsx: navigation, the "How it works" pop-up, and your device-only workspace.
+ * There is no login: "recently viewed" lives in this browser (see recent.js) and can be cleared.
+ */
+import { useState } from "react";
 import { NavLink } from "react-router-dom";
-import { CheckCircle2, ChevronRight, FileText, Headphones, Home, Search, Target } from "lucide-react";
+import { CheckCircle2, FileText, HardDrive, Home, Info, Search, Target, Trash2 } from "lucide-react";
 import { useLanguage } from "../LanguageContext.jsx";
+import { clearRecent, getRecent } from "../recent.js";
+import HowItWorks from "./HowItWorks.jsx";
 
 const NAV = [
   { to: "/", key: "nav.dashboard", icon: Home, end: true },
@@ -11,6 +18,15 @@ const NAV = [
 
 export default function Sidebar() {
   const { t } = useLanguage();
+  const [showHow, setShowHow] = useState(false);
+  const count = getRecent().length;
+
+  function clearMyData() {
+    if (!window.confirm("Remove your recently viewed list and settings from this browser?")) return;
+    clearRecent();
+    window.location.assign("/");
+  }
+
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -38,23 +54,26 @@ export default function Sidebar() {
       <div className="sidebar-bottom">
         <div className="help-card">
           <div className="help-icon">
-            <Headphones size={18} />
+            <Info size={18} />
           </div>
-          <strong>Need help?</strong>
-          <p>Learn how NagrikAI uses official sources.</p>
-          <a href="#how-it-works" onClick={(e) => e.preventDefault()}>
-            View help centre →
-          </a>
+          <strong>How it works</strong>
+          <p>See how every answer is checked against the official document.</p>
+          <button type="button" className="link-btn" onClick={() => setShowHow(true)}>
+            Learn how →
+          </button>
         </div>
         <div className="account">
-          <div className="avatar">AK</div>
+          <div className="avatar"><HardDrive size={18} /></div>
           <div className="account-text">
-            <strong>Citizen account</strong>
-            <span>Personal workspace</span>
+            <strong>Your workspace</strong>
+            <span>Saved on this device · {count} recent</span>
           </div>
-          <ChevronRight size={16} />
+          <button type="button" className="icon-ghost" onClick={clearMyData} aria-label="Clear my data" title="Clear my data">
+            <Trash2 size={16} />
+          </button>
         </div>
       </div>
+      {showHow && <HowItWorks onClose={() => setShowHow(false)} />}
     </aside>
   );
 }

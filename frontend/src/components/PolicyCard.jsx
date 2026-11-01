@@ -32,9 +32,11 @@ export default function PolicyCard({ policy }) {
       <p className="policy-authority">{policy.authority}</p>
       {policy.summary && <p className="policy-summary">{policy.summary}</p>}
       <div className="policy-actions">
-        <a className="btn btn-outline" href={policy.url} target="_blank" rel="noreferrer">
-          <ExternalLink size={15} /> Open Official Document
-        </a>
+        {policy.url && (
+          <a className="btn btn-outline" href={policy.url} target="_blank" rel="noreferrer">
+            <ExternalLink size={15} /> Open Official Document
+          </a>
+        )}
         <Link className="btn btn-primary" to={`/explainer/${policy.id}`}>
           <FileText size={15} /> Understand This Policy
         </Link>

@@ -32,6 +32,11 @@ const VERDICTS = {
 const UNKNOWN_VERDICT = { cls: "warn", text: "The result could not be classified. Please review the source criteria or try again." };
 const STATUS_LABELS = { met: "Satisfied", not_met: "Not satisfied", unknown: "Still unknown" };
 
+// Uploaded files have no website, so there is nothing to open for them.
+function openSource(url) {
+  if (url) window.open(url, "_blank", "noopener");
+}
+
 export default function EligibilityChecker() {
   const { policyId: routeId } = useParams();
   const navigate = useNavigate();
@@ -127,7 +132,7 @@ export default function EligibilityChecker() {
     return (
       <ol className="points">
         {items.map((it, i) => (
-          <li key={i}><p>{it[field]}</p><CitationChip page={it.page} clause={it.clause} quote={it.quote} onClick={() => window.open(rules?.policy?.url, "_blank")} /></li>
+          <li key={i}><p>{it[field]}</p><CitationChip page={it.page} clause={it.clause} quote={it.quote} onClick={() => openSource(rules?.policy?.url)} /></li>
         ))}
       </ol>
     );
@@ -239,7 +244,7 @@ export default function EligibilityChecker() {
                           <div className="follow-up-criterion" key={criterion.criterion_id}>
                             <p>{criterion.text}</p>
                             <CitationChip page={criterion.page} clause={criterion.clause} quote={criterion.quote}
-                              onClick={() => window.open(rules?.policy?.url, "_blank")} />
+                              onClick={() => openSource(rules?.policy?.url)} />
                           </div>
                         ))}
                         {question.answer_type === "choice" && <p className="follow-up-help">{question.answer_help}</p>}
@@ -283,7 +288,7 @@ export default function EligibilityChecker() {
                         <li key={i}>
                           {r.status === "met" ? <CheckCircle2 className="ok" size={18} /> : r.status === "not_met" ? <XCircle className="bad" size={18} /> : <HelpCircle className="warn" size={18} />}
                           <div><p>{r.criterion}</p><small className={`criterion-status ${r.status}`}>{STATUS_LABELS[r.status] || STATUS_LABELS.unknown}</small><small>{r.reason}</small>{r.manual_verification && <small className="criterion-status unknown">Requires manual verification</small>}</div>
-                          <CitationChip page={r.page} clause={r.clause} onClick={() => window.open(rules?.policy?.url, "_blank")} />
+                          <CitationChip page={r.page} clause={r.clause} onClick={() => openSource(rules?.policy?.url)} />
                         </li>
                       ))}
                     </ul>

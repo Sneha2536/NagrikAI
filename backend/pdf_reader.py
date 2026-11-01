@@ -396,10 +396,47 @@ def _cache_path(policy_id: str):
     return settings.INDEX_DIR / "docs" / f"{policy_id}.json"
 
 
+UPLOAD_SOURCE = "Uploaded by you"
+
+
+def _save_document(policy: Policy, is_pdf: bool, page_texts: list[str]) -> Document:
+    """Turn parsed pages into a Document and cache it."""
+    if not any(t.strip() for t in page_texts):
+        raise DocumentError(
+            "No readable text found in this document (it may be a scanned image; OCR is not enabled)."
+        )
+    doc = Document(
+        policy_id=policy.id,
+        url=policy.url,
+        is_pdf=is_pdf,
+        pages=[Page(i + 1, t) for i, t in enumerate(page_texts)],
+    )
+    _cache_path(policy.id).write_text(json.dumps(doc.to_dict(), ensure_ascii=False), encoding="utf-8")
+    return doc
+
+
+def ingest_upload(policy: Policy, body: bytes) -> Document:
+    """Read a PDF the user uploaded (no download involved)."""
+    if not body.startswith(b"%PDF-"):
+        raise DocumentError("This file is not a PDF.")
+    doc = _save_document(policy, True, _parse_pdf(body))
+    (settings.PDF_DIR / f"{policy.id}.pdf").write_bytes(body)
+    return doc
+
+
 def load_document(policy: Policy) -> Document:
     cache = _cache_path(policy.id)
     if cache.exists():
         return Document.from_dict(json.loads(cache.read_text(encoding="utf-8")))
+
+    if policy.source == UPLOAD_SOURCE:
+        saved = settings.PDF_DIR / f"{policy.id}.pdf"
+        if not saved.exists():
+            raise DocumentError(
+                "This uploaded file is no longer stored on the server (free hosting clears files "
+                "when it restarts). Please upload it again."
+            )
+        return _save_document(policy, True, _parse_pdf(saved.read_bytes()))
 
     body, content_type, encoding = _download_document(policy.url)
     is_pdf = body[:5] == b"%PDF-" or "pdf" in content_type.lower()
@@ -408,17 +445,4 @@ def load_document(policy: Policy) -> Document:
         page_texts = _parse_pdf(body)
     else:
         page_texts = _split_text(_html_to_text(body.decode(encoding, errors="replace")))
-
-    if not any(t.strip() for t in page_texts):
-        raise DocumentError(
-            "No readable text found in this document (it may be a scanned image; OCR is not enabled)."
-        )
-
-    doc = Document(
-        policy_id=policy.id,
-        url=policy.url,
-        is_pdf=is_pdf,
-        pages=[Page(i + 1, t) for i, t in enumerate(page_texts)],
-    )
-    cache.write_text(json.dumps(doc.to_dict(), ensure_ascii=False), encoding="utf-8")
-    return doc
+    return _save_document(policy, is_pdf, page_texts)

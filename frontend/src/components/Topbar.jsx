@@ -1,9 +1,9 @@
 /**
- * Topbar.jsx: breadcrumb, language dropdown, notifications, and the Policy Explorer shortcut.
- * The language chosen here changes the whole app (see LanguageContext.jsx).
+ * Topbar.jsx: breadcrumb, the language dropdown (changes the whole app, see LanguageContext.jsx),
+ * and the "Add document" shortcut (paste an official link or upload a PDF).
  */
 import { Link, useLocation } from "react-router-dom";
-import { Bell, ChevronDown, Globe, Search } from "lucide-react";
+import { ChevronDown, Globe, Plus } from "lucide-react";
 import { useLanguage } from "../LanguageContext.jsx";
 import { LANGUAGES } from "../translations.js";
 
@@ -44,11 +44,8 @@ export default function Topbar() {
           </select>
           <ChevronDown size={13} />
         </label>
-        <button className="icon-btn" aria-label="Notifications">
-          <Bell size={18} />
-        </button>
-        <Link to="/explorer" className="btn btn-primary">
-          <Search size={17} /> Policy Explorer
+        <Link to="/explorer#paste" className="btn btn-primary">
+          <Plus size={17} /> Add document
         </Link>
       </div>
     </header>

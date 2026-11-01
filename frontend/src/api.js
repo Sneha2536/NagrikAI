@@ -44,6 +44,13 @@ export function searchPolicies(params = {}) {
   return request(`/api/policies/search?${qs}`);
 }
 export const addPolicyFromUrl = (url) => post("/api/policies/from-url", { url });
+/** Upload a PDF from the user's computer: the file itself is the request body. */
+export const uploadPolicyPdf = (file) =>
+  request(`/api/policies/upload?filename=${encodeURIComponent(file.name)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/pdf" },
+    body: file,
+  });
 export const getPolicy = (id) => request(`/api/policies/${id}`);
 export const getDocument = (id) => request(`/api/policies/${id}/document`);
 

@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
-  ChevronLeft, ChevronRight, ExternalLink, FileText, Globe, Link2, Minus, Plus, RefreshCw, Search, ShieldCheck, Sparkles,
+  ChevronLeft, ChevronRight, ExternalLink, FileText, Link2, Minus, Plus, RefreshCw, Search, ShieldCheck, Sparkles,
 } from "lucide-react";
 import { explainPolicy, getDocument } from "../api.js";
 import ChatBox from "../components/ChatBox.jsx";
@@ -18,7 +18,6 @@ import ListenButton from "../components/ListenButton.jsx";
 import StateMessage from "../components/StateMessage.jsx";
 import { useLanguage } from "../LanguageContext.jsx";
 import { addRecent } from "../recent.js";
-import { LANGUAGES } from "../translations.js";
 
 const TABS = [
   { key: "simple", label: "tab.simple" },
@@ -28,7 +27,7 @@ const TABS = [
 
 export default function PolicyExplainer() {
   const { policyId } = useParams();
-  const { lang, setLang, t } = useLanguage();
+  const { lang, t } = useLanguage();
 
   const [doc, setDoc] = useState(null);
   const [docError, setDocError] = useState("");
@@ -110,16 +109,9 @@ export default function PolicyExplainer() {
           <strong>{policy ? policy.title : "No policy selected"}</strong>
           <small>{policy ? `${policy.authority} · ${policy.source}` : "Choose a policy from Policy Explorer"}</small>
         </div>
-        <label className="select-pill">
-          <Globe size={17} />
-          <select value={lang} onChange={(e) => setLang(e.target.value)} aria-label="Explanation language">
-            {LANGUAGES.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
-          </select>
-        </label>
         <button className="btn btn-outline" disabled={!policyId || explLoading} onClick={() => loadExplanation(true)}>
           <RefreshCw size={16} className={explLoading ? "spin" : ""} /> {t("reanalyse")}
         </button>
-        <Link to="/explorer" className="btn btn-primary"><Search size={16} /> Explore policies</Link>
       </div>
 
       <div className="split">
@@ -178,7 +170,7 @@ export default function PolicyExplainer() {
 
             <div className="ai-body">
               {!policyId && (
-                <StateMessage title={`${t(TABS.find((x) => x.key === tab).label)} will appear here`}
+                <StateMessage title={`${t(TABS.find((x) => x.key === tab)?.label || "tab.simple")} will appear here`}
                   text="Once a policy is selected, NagrikAI will explain this section and show matching source quotes when available." />
               )}
               {policyId && explLoading && <StateMessage loading title="Reading the policy…" text="Writing a plain-language explanation and checking every point against the document." />}

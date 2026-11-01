@@ -4,13 +4,13 @@
  * Flow: user types / picks filters -> api.searchPolicies() -> backend asks PIB, myScheme...
  *       -> list of PolicyCards. If a source is down we say so honestly (no fake results).
  */
-import { useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowRight, ExternalLink, Info, Link2, Loader2, Search, ShieldCheck } from "lucide-react";
-import { addPolicyFromUrl, searchPolicies } from "../api.js";
+import { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { ArrowRight, ExternalLink, Info, Link2, Loader2, Search, ShieldCheck, Upload } from "lucide-react";
+import { addPolicyFromUrl, searchPolicies, uploadPolicyPdf } from "../api.js";
 import PolicyCard from "../components/PolicyCard.jsx";
 import StateMessage from "../components/StateMessage.jsx";
-import { BENEFICIARIES, DATE_OPTIONS, INDIAN_STATES, OFFICIAL_SITES } from "../constants.js";
+import { BENEFICIARIES, DATE_OPTIONS, OFFICIAL_SITES } from "../constants.js";
 
 export default function PolicyExplorer() {
   const [searchParams] = useSearchParams();
@@ -20,18 +20,38 @@ export default function PolicyExplorer() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [nonce, setNonce] = useState(0);        // bump to force a reload ("Try again")
-  const [ministries, setMinistries] = useState([]);
-  const [categories, setCategories] = useState([]);
 
   // "Paste a link" box: add any official document (gazette PDF, scheme guideline, draft policy)
   const navigate = useNavigate();
   const [link, setLink] = useState("");
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef(null);
+  const { hash } = useLocation();
 
+  // "Add document" in the top bar links to #paste: scroll to the box, even if we are already on this page
   useEffect(() => {
-    if (window.location.hash === "#paste") document.getElementById("paste")?.scrollIntoView({ behavior: "smooth" });
-  }, []);
+    if (hash === "#paste") document.getElementById("paste")?.scrollIntoView({ behavior: "smooth" });
+  }, [hash]);
+
+  async function onFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";                       // lets the same file be chosen again
+    if (!file) return;
+    if (!/\.pdf$/i.test(file.name)) return setAddError("Please choose a PDF file.");
+    if (file.size > 25 * 1024 * 1024) return setAddError("The file is larger than 25 MB.");
+    setUploading(true);
+    setAddError("");
+    try {
+      const policy = await uploadPolicyPdf(file);
+      navigate(`/explainer/${policy.id}`);
+    } catch (err) {
+      setAddError(err.message);
+    } finally {
+      setUploading(false);
+    }
+  }
 
   async function addLink(e) {
     e.preventDefault();
@@ -55,9 +75,6 @@ export default function PolicyExplorer() {
       .then((res) => {
         if (cancelled) return;
         setData(res);
-        // Build dropdown options from what the real sources actually returned.
-        setMinistries((prev) => [...new Set([...prev, ...res.items.map((p) => p.authority)])].sort());
-        setCategories((prev) => [...new Set([...prev, ...res.items.map((p) => p.category).filter(Boolean)])].sort());
       })
       .catch((e) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setLoading(false));
@@ -71,6 +88,11 @@ export default function PolicyExplorer() {
   const allFailed = data && active.length > 0 && failed.length === active.length;
   const pibCount = data?.sources.find((s) => s.source === "PIB")?.count || 0;
   const policyOnly = filters.policy_only !== "false";
+  // Filter choices come from what the real sources returned (the server counts them), never from a fixed list.
+  const facets = data?.facets || { authority: {}, category: {}, states: {}, beneficiary: {}, total: 0 };
+  const ministries = Object.keys(facets.authority).sort();
+  const categories = Object.keys(facets.category).sort();
+  const states = Object.keys(facets.states).sort();
 
   function submit(e) {
     e.preventDefault();
@@ -97,9 +119,9 @@ export default function PolicyExplorer() {
             </select>
           </label>
           <label>State
-            <select value={filters.state} onChange={set("state")}>
-              <option value="">All states and Union Territories</option>
-              {INDIAN_STATES.map((s) => <option key={s}>{s}</option>)}
+            <select value={filters.state} onChange={set("state")} disabled={states.length === 0}>
+              <option value="">{states.length ? "All states and Union Territories" : "No state information in these results"}</option>
+              {states.map((s) => <option key={s}>{s}</option>)}
             </select>
           </label>
           <label>Category
@@ -119,7 +141,7 @@ export default function PolicyExplorer() {
       <form id="paste" className="card add-card" onSubmit={addLink}>
         <div>
           <strong>Have a gazette notification, scheme guideline or draft policy?</strong>
-          <p className="section-sub">Paste the link to the official PDF or page (.gov.in or .nic.in) and NagrikAI will explain it.</p>
+          <p className="section-sub">Paste the link to the official PDF or page (.gov.in or .nic.in), or upload the PDF, and NagrikAI will explain it.</p>
         </div>
         <div className="search-row">
           <Link2 size={19} />
@@ -127,6 +149,14 @@ export default function PolicyExplorer() {
           <button className="btn btn-primary" type="submit" disabled={adding || !link.trim()}>
             {adding ? <Loader2 size={17} className="spin" /> : <ArrowRight size={17} />} {adding ? "Reading…" : "Explain this document"}
           </button>
+        </div>
+        <div className="upload-row">
+          <span>or</span>
+          <input ref={fileRef} type="file" accept="application/pdf,.pdf" hidden onChange={onFile} />
+          <button type="button" className="btn btn-outline" disabled={uploading} onClick={() => fileRef.current?.click()}>
+            {uploading ? <Loader2 size={17} className="spin" /> : <Upload size={17} />} {uploading ? "Reading…" : "Upload a PDF from your computer"}
+          </button>
+          <small>PDF up to 25 MB. Uploaded files are labelled “not verified as official”.</small>
         </div>
         {addError && <div className="notice error"><Info size={15} /> {addError}</div>}
       </form>
@@ -137,12 +167,17 @@ export default function PolicyExplorer() {
           <p className="section-sub">Discover information relevant to you or someone you are helping.</p>
         </div>
         <div className="pills">
-          {BENEFICIARIES.map((b) => (
-            <button key={b.value} className={"pill" + (filters.beneficiary === b.value ? " active" : "")}
-              onClick={() => setFilters((f) => ({ ...f, beneficiary: b.value }))}>
-              {b.label}
-            </button>
-          ))}
+          {BENEFICIARIES.map((b) => {
+            const count = data ? (b.value ? facets.beneficiary[b.value] ?? 0 : facets.total) : null;
+            const active = filters.beneficiary === b.value;
+            return (
+              <button key={b.value} className={"pill" + (active ? " active" : "")} disabled={count === 0 && !active}
+                title={count === 0 ? "Nothing in the current results matches this group" : undefined}
+                onClick={() => setFilters((f) => ({ ...f, beneficiary: b.value }))}>
+                {b.label}{count !== null && <small> {count}</small>}
+              </button>
+            );
+          })}
         </div>
       </div>
 

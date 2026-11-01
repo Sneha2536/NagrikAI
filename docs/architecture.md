@@ -12,6 +12,7 @@ flowchart LR
     BE -->|search| Sources
     BE --> PR[pdf_reader<br/>download + parse into pages]
     Sources --> PR
+    UP[PDF upload] --> PR
 
     PR --> IDX[search_index<br/>BM25 retrieval]
     IDX --> LLM[llm.py<br/>Gemini or Claude]

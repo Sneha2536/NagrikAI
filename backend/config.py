@@ -15,7 +15,7 @@ load_dotenv(ROOT / ".env")
 
 class Settings:
     # Bump when you change code. The frontend compares this to detect a backend that was not restarted.
-    BUILD = "2026-10-31-f"
+    BUILD = "2026-11-01-a"
 
     # ---- Which AI service to use: "gemini" (has a free tier) or "anthropic" (Claude)
     LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
@@ -33,6 +33,8 @@ class Settings:
     MYSCHEME_API_KEY = os.getenv("MYSCHEME_API_KEY", "")
     # Optional extra CA certificates for official-document HTTPS downloads (PEM bundle).
     PDF_CA_BUNDLE = os.getenv("PDF_CA_BUNDLE", "").strip()
+    # Documents up to this many characters are given to the AI whole when answering questions.
+    ASK_FULL_DOC_CHARS = int(os.getenv("ASK_FULL_DOC_CHARS", "90000"))
     MAX_DOCUMENT_BYTES = int(os.getenv("MAX_DOCUMENT_BYTES", str(25 * 1024 * 1024)))
 
     # ---- Limits

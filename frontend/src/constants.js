@@ -1,7 +1,7 @@
 /** constants.js: fixed lists used by filters and forms (geography and UI choices, not policy data). */
 
 // Must match BUILD in backend/config.py. If they differ, the app tells you to restart the backend.
-export const BUILD = "2026-10-31-e";
+export const BUILD = "2026-11-01-a";
 
 export const INDIAN_STATES = [
   "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh", "Goa", "Gujarat",

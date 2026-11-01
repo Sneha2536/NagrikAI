@@ -8,6 +8,7 @@ registry.py: asks ALL source connectors at once and combines the results.
   (explain, ask, eligibility) can look it up by id.
 """
 import json
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
@@ -81,6 +82,28 @@ def _matches(p: Policy, ministry, state, category, beneficiary, since, policy_on
     return True
 
 
+def _facets(policies: list[Policy]) -> dict:
+    """What is really in the results, so the UI only offers filters that have something to filter."""
+    authority, category, states = Counter(), Counter(), Counter()
+    for p in policies:
+        authority[p.authority] += 1
+        if p.category:
+            category[p.category] += 1
+        for s in p.states:
+            states[s] += 1
+    beneficiary = {
+        key: sum(
+            1 for p in policies
+            if any(k in f"{p.title} {p.summary} {' '.join(p.tags)} {p.category}".lower() for k in words)
+        )
+        for key, words in BENEFICIARY_KEYWORDS.items()
+    }
+    return {
+        "authority": dict(authority), "category": dict(category), "states": dict(states),
+        "beneficiary": beneficiary, "total": len(policies),
+    }
+
+
 def search_policies(query=None, ministry=None, state=None, category=None,
                     beneficiary=None, date_window=None, policy_only=True) -> dict:
     with ThreadPoolExecutor(max_workers=len(SOURCES)) as pool:
@@ -110,6 +133,7 @@ def search_policies(query=None, ministry=None, state=None, category=None,
     if date_window in DATE_WINDOWS:
         since = (date.today() - timedelta(days=DATE_WINDOWS[date_window])).isoformat()
 
+    visible = [p for p in combined if _matches(p, None, None, None, None, None, policy_only)]
     items = [p for p in combined if _matches(p, ministry, state, category, beneficiary, since, policy_only)]
     items.sort(key=lambda p: (1 if p.source == "Official link" else 0, p.published or ""), reverse=True)
-    return {"items": [p.to_dict() for p in items], "sources": status}
+    return {"items": [p.to_dict() for p in items], "sources": status, "facets": _facets(visible)}

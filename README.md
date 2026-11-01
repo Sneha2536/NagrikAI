@@ -10,10 +10,11 @@ the AI cannot prove from the document are removed.
 ## Features
 
 - **Policy Explorer**: live search across official sources (PIB releases with a "Policy-related only" switch, myScheme), filters, beneficiary chips
-- **Paste a link**: add any official document (gazette PDF, scheme guideline, draft policy) from a .gov.in / .nic.in address
+- **Add a document**: paste an official link (.gov.in / .nic.in) or **upload a PDF**; uploads are labelled "not verified as official"
 - **Policy Explainer**: original document beside a Simple / Detailed / Key Benefits explanation, with citations
-- **Ask about this policy**: Q&A using retrieval (RAG) over only that document; refuses when unsure
+- **Ask about this policy**: short documents are read whole by the AI, long ones are searched (query rewriting + BM25); every answer must quote the document, and refuses when the document does not contain it
 - **Eligibility Checker**: criteria, required documents and application steps extracted from the policy, then matched to your details
+- **How it works** panel and a device-only workspace (no login; history stays in your browser)
 - **Languages**: English, Hindi, Bengali, Tamil, Telugu, Marathi · **Listen** button reads explanations aloud
 
 ## Architecture
@@ -30,6 +31,7 @@ flowchart LR
     BE -->|search| Sources
     BE --> PR[pdf_reader<br/>download + parse into pages]
     Sources --> PR
+    UP[PDF upload] --> PR
 
     PR --> IDX[search_index<br/>BM25 retrieval]
     IDX --> LLM[llm.py<br/>Gemini or Claude]
@@ -95,6 +97,7 @@ cd backend && pytest
 | Source | Status | Notes |
 |---|---|---|
 | PIB (pib.gov.in) | Works without a key | RSS feed of recent releases. Releases that look like policies are tagged and shown by default; untick "Policy-related only" to see all. These are announcements, not full policy documents |
+| Uploaded PDF | Works without a key | Always works, even if a government site is down. Not verified as official |
 | Pasted official link | Works without a key | Best source for real notifications, guidelines and draft policies |
 | myScheme | Needs `MYSCHEME_API_KEY` | Undocumented API; run `check_sources.py` and adjust `sources/myscheme.py` if the response format differs |
 | e-Gazette, India Code | Link-out only | Add a connector in `backend/sources/` (see `pib.py` as a template) |
@@ -126,3 +129,11 @@ frontend/src/
   api.js               every backend call
   translations.js      interface text in 6 languages
 ```
+
+## PIB feed language
+`PIB_RSS_URL` in `.env` chooses the feed. PIB's own feed page (https://www.pib.gov.in/ViewRss.aspx?reg=48&lang=1) says `lang=1` is English and `lang=2` is Hindi. Copy the Press Releases feed link from that page into `PIB_RSS_URL` (also on Render under Environment), then restart.
+
+## Demo checklist
+1. Open `/api/health` on the live site: build matches, `llm_configured` is true.
+2. Paste one official link, upload one PDF, open both once so the explanations are cached.
+3. Show: explanation with page/clause chips, the removed-unverifiable-points note, Listen, a question the document answers and one it does not (refusal), Eligibility check.

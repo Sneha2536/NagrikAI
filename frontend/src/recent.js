@@ -12,6 +12,14 @@ export function getRecent() {
   }
 }
 
+export function clearRecent() {
+  try {
+    localStorage.removeItem(KEY);
+  } catch {
+    /* storage blocked: ignore */
+  }
+}
+
 export function addRecent(policy) {
   try {
     const next = [

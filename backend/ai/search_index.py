@@ -71,11 +71,13 @@ class BM25Index:
         return [{**self.chunks[i], "score": round(s, 3)} for s, i in scored[:k]]
 
 
-_cache: dict[str, BM25Index] = {}
+_cache: dict[tuple[str, int], BM25Index] = {}
 
 
 def get_index(doc: Document) -> BM25Index:
-    """Build the index once per document, then reuse it."""
-    if doc.policy_id not in _cache:
-        _cache[doc.policy_id] = BM25Index(chunk_document(doc))
-    return _cache[doc.policy_id]
+    """Build the index once per document, then reuse it. The key includes the text size, so a
+    changed document under the same id gets a fresh index instead of a stale one."""
+    key = (doc.policy_id, sum(len(p.text) for p in doc.pages))
+    if key not in _cache:
+        _cache[key] = BM25Index(chunk_document(doc))
+    return _cache[key]
